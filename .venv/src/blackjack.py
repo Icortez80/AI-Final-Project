@@ -1,7 +1,19 @@
-#This file is responsible for the overall flow/structure of the game
-#actual game logic and loop should be separated -> game.py
-#player object -> player.py
-#agent logic -> agent.py
-#if these main files need extra files for support, include name & purpose of
-#supporting files
+"""Executable entry point for the blackjack project.
 
+Run this file to play. A future agent can be passed to Game.gameLoop() as an
+action provider without changing the blackjack rules in game.py.
+"""
+
+from game import Game
+
+
+def main():
+    game = Game(number_of_decks=1)
+
+    # For now, None makes the game read human input.
+    # Later this can become: game.gameLoop(action_provider=agent.choose_action)
+    game.gameLoop(action_provider=None)
+
+
+if __name__ == "__main__":
+    main()
