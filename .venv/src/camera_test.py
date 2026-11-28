@@ -1,7 +1,7 @@
 import cv2
 from pathlib import Path
 
-camera = cv2.VideoCapture(2)
+camera = cv2.VideoCapture(0)
 
 SAVE_FOLDER = Path("cards")
 SAVE_FOLDER.mkdir(exist_ok=True)

@@ -1,122 +1,108 @@
-import cv2
-import numpy as np
+
+"""Card-template recognition.
+
+This module loads labeled card images and recognizes one already-cropped,
+perspective-corrected card. Live camera handling is in camera.py.
+"""
+
+from collections import defaultdict
 from pathlib import Path
 
-CARD_FOLDER = Path("cards")
+import cv2
+import numpy as np
 
-# Change these if your card images have a different shape
-IMAGE_SIZE = (200, 200)
-
-templates = []
+from cardtracker import find_card
 
 
-def preprocess(image):
-    height, width = image.shape[:2]
+class CardRecognizer:
+    def __init__(self, card_folder="cards", image_size=(100, 100)):
+        self.card_folder = Path(card_folder)
+        self.image_size = image_size
+        self.templates = []
+        self.load_templates()
 
-    # Adjust these percentages after viewing your crop
-    rank_corner = image[
-        int(height * 0.10):int(height * 0.45),
-        int(width * 0.08):int(width * 0.40)
-    ]
+    def preprocess(self, image):
+        """Extract and normalize the rank region from a card image."""
+        height, width = image.shape[:2]
 
-    gray = cv2.cvtColor(rank_corner, cv2.COLOR_BGR2GRAY)
+        rank_corner = image[
+            int(height * 0.01):int(height * 0.35),
+            int(width * 0.01):int(width * 0.20)
+        ]
 
-    # Reduce lighting differences
-    gray = cv2.equalizeHist(gray)
+        gray = cv2.cvtColor(rank_corner, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(
+            gray,
+            self.image_size,
+            interpolation=cv2.INTER_AREA
+        )
 
-    gray = cv2.resize(gray, IMAGE_SIZE)
+        return cv2.normalize(
+            gray,
+            None,
+            0,
+            255,
+            cv2.NORM_MINMAX
+        )
 
-    return gray
+    def image_paths(self):
+        valid_extensions = {".jpg", ".jpeg", ".png"}
 
+        return sorted(
+            path for path in self.card_folder.iterdir()
+            if path.suffix.lower() in valid_extensions
+        )
 
-def load_templates():
-    for image_path in sorted(CARD_FOLDER.glob("*.jpg")):
-        image = cv2.imread(str(image_path))
+    def load_templates(self):
+        for image_path in self.image_paths():
+            image = cv2.imread(str(image_path))
 
-        if image is None:
-            print(f"Could not load {image_path}")
-            continue
+            if image is None:
+                print(f"Could not load {image_path}")
+                continue
 
-        # Gets the rank from names such as 8_0.jpg or A_1.jpg
-        rank = image_path.stem.split("_")[0]
+            # Apply the same perspective correction used for live cards.
+            detected_card, _ = find_card(image)
 
-        processed_image = preprocess(image)
-        templates.append((rank, processed_image))
+            if detected_card is None:
+                print(f"Could not find card inside {image_path.name}")
+                continue
 
-        print(f"Loaded {image_path.name} as rank {rank}")
+            rank = image_path.stem.split("_")[0]
+            processed_image = self.preprocess(detected_card)
+            self.templates.append((rank, processed_image))
 
-    print(f"Loaded {len(templates)} templates.")
+        print(f"Loaded {len(self.templates)} card templates.")
 
+    def recognize_card(self, card_image, show_debug=False):
+        if not self.templates:
+            raise RuntimeError("No card templates were loaded.")
 
-def recognize_card(card_image):
-    processed_card = preprocess(card_image)
+        processed_card = self.preprocess(card_image)
 
-    best_rank = None
-    best_score = float("inf")
+        if show_debug:
+            cv2.imshow("Processed Rank", processed_card)
 
-    for rank, template in templates:
-        difference = processed_card.astype(float) - template.astype(float)
-        score = np.mean(difference ** 2)
+        scores_by_rank = defaultdict(list)
 
-        if score < best_score:
-            best_score = score
-            best_rank = rank
+        for rank, template in self.templates:
+            difference = (
+                    processed_card.astype(float)
+                    - template.astype(float)
+            )
 
-    return best_rank, best_score
+            score = np.mean(difference ** 2)
+            scores_by_rank[rank].append(score)
 
+        if not scores_by_rank:
+            return None
 
-load_templates()
+        rank_scores = {
+            rank: np.mean(sorted(scores)[:3])
+            for rank, scores in scores_by_rank.items()
+        }
 
-camera = cv2.VideoCapture(2)
+        best_rank = min(rank_scores, key=rank_scores.get)
+        best_score = rank_scores[best_rank]
 
-if not camera.isOpened():
-    print("Could not open camera.")
-    exit()
-
-while True:
-    success, frame = camera.read()
-
-    if not success:
-        print("Could not read frame.")
-        break
-
-    # Adjust these coordinates to surround the card
-    x1, y1 = 100, 100
-    x2, y2 = 300, 400
-
-    card_crop = frame[y1:y2, x1:x2]
-
-    rank, score = recognize_card(card_crop)
-
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-    cv2.putText(
-        frame,
-        f"Recognized: {rank}",
-        (30, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0, 255, 0),
-        2
-    )
-
-    cv2.putText(
-        frame,
-        f"Score: {score:.0f}",
-        (30, 75),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (0, 255, 0),
-        2
-    )
-
-    cv2.imshow("Card Recognition", frame)
-    cv2.imshow("Card Crop", card_crop)
-
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord("q"):
-        break
-
-camera.release()
-cv2.destroyAllWindows()
+        return best_rank, best_score
